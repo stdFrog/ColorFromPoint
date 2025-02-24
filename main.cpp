@@ -77,7 +77,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 			SetRect(&g_rcMagnify, 0,0, 100, 100);
 
 			g_hScreenDC	= GetDC(NULL);
-			g_hHook		= SetWindowsHookEx(WH_MOUSE_LL, MouseHook, hInst, 0);
+			g_hHook		= SetWindowsHookEx(WH_MOUSE_LL, MouseHook, GetModuleHandle(NULL), 0);
 			return 0;
 
 		case WM_SIZE:
@@ -108,7 +108,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 			{
 				PAINTSTRUCT ps;
 				HDC hdc		= BeginPaint(hWnd, &ps);
-				DrawBitmap(hdc, 0,0, hBitmap);
+				HDC hMemDC	= CreateCompatibleDC(hdc);
+				GetClientRect(hWnd, &crt);
+				if(hBitmap == NULL){
+					hBitmap = CreateCompatibleBitmap(hdc, crt.right, crt.bottom);
+				}
+				HGDIOBJ hOld = SelectObject(hMemDC, hBitmap);
+
+				SelectObject(hMemDC, hOld);
+				DeleteDC(hMemDC);
 				EndPaint(hWnd, &ps);
 			}
 			return 0;
@@ -241,6 +249,7 @@ void ErrorMessage(LPTSTR msg, ...){
 
 LRESULT CALLBACK MouseHook(int nCode, WPARAM wParam, LPARAM lParam){
 	if(nCode == HC_ACTION && hBitmap != NULL){
+		MessageBox(HWND_DESKTOP, TEXT("HelloWorld"), TEXT("Debug"), MB_OK);
 		POINT		Mouse, Origin;
 		BITMAP		bmp;
 		COLORREF	color;
@@ -306,8 +315,8 @@ LRESULT CALLBACK MouseHook(int nCode, WPARAM wParam, LPARAM lParam){
 						hPen = CreatePen(PS_SOLID, 1, RGB(0,0,0));
 					}
 
-					HPEN hOldPen = (HPEN)SelectObject(hDrawMemDC, hPen);
-					HBRUSH hOldBrush = (HBRUSH)SelectObject(hDrawMemDC, (HBRUSH)GetStockObject(NULL_BRUSH));
+					HPEN hOldPen		= (HPEN)SelectObject(hDrawMemDC, hPen);
+					HBRUSH hOldBrush	= (HBRUSH)SelectObject(hDrawMemDC, (HBRUSH)GetStockObject(NULL_BRUSH));
 					Ellipse(hDrawMemDC, Origin.x - iRadius, Origin.y - iRadius, Origin.x + iRadius, Origin.y + iRadius);
 					SelectObject(hDrawMemDC, hOldBrush);
 					SelectObject(hDrawMemDC, hOldPen);
@@ -317,7 +326,7 @@ LRESULT CALLBACK MouseHook(int nCode, WPARAM wParam, LPARAM lParam){
 					HGDIOBJ hClientOld	= SelectObject(hClientMemDC, hBitmap);
 					GetObject(hBitmap, sizeof(BITMAP), &bmp);
 					BitBlt(
-						hdc,
+						hClientMemDC,
 						10,10, bmp.bmWidth, bmp.bmHeight,
 						hDrawMemDC,
 						0,0,
