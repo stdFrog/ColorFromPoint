@@ -1,4 +1,3 @@
-path .\batch\
-
-build_dll.bat
-build_exe.bat
+call build_dll.bat
+call build_exe.bat
+ColorFromPoint.exe

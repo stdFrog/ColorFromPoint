@@ -60,18 +60,20 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow){
 }
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam){
-	const char		*MyDll = "MyMouseDll.dll",
-					*MyProc = "MyMouseProc",
-					*MyUtil = "Init";
-	static HDC		g_hScreenDC;
-	static RECT		g_rcMagnify;
-	static int		g_iRate = 2;
-	static HBITMAP	g_hBitmap;
-	static HHOOK	g_hHook;
-	static HMODULE	g_hModule;
-	static HOOKPROC	g_lpfnHookProc;
+	const char		*MyDll			= "MyMouseDll.dll",
+		  *MyProc			= "MyMouseProc",
+		  *MyUtil			= "Init";
+	static HDC		g_hScreenDC		= NULL;
+	static RECT		g_rcMagnify		= {0,};
+	static int		g_iRate			= 2;
+	static HBITMAP	g_hBitmap		= NULL,
+					g_hDrawBitmap	= NULL,
+					g_hScreenBitmap = NULL;
+	static HHOOK	g_hHook			= NULL;
+	static HMODULE	g_hModule		= NULL;
+	static HOOKPROC	g_lpfnHookProc	= NULL;
 
-	void (*pInit)(HWND, HHOOK);
+	void (*pInit)(HWND, HHOOK) = NULL;
 
 	RECT	crt;
 	BITMAP	bmp;
@@ -82,7 +84,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 		case WM_CREATE:
 			// TODO: DLL 명시적 호출 및 프로시저 핸들 얻어오기
 			try{
-				g_hScreenDC = GetDC(NULL);
 				g_hModule = LoadLibrary(MyDll);
 				if(g_hModule == NULL){ throw 1; }
 
@@ -113,8 +114,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 					DeleteObject(g_hBitmap);
 					g_hBitmap = NULL;
 				}
-
-				GetClientRect(hWnd, &crt);
 			}
 			return 0;
 
@@ -134,9 +133,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 		case WM_PAINT:
 			{
 				PAINTSTRUCT ps;
-				HDC hdc		= BeginPaint(hWnd, &ps);
-				/*
-				HDC hMemDC	= CreateCompatibleDC(hdc);
+				HDC hdc = BeginPaint(hWnd, &ps);
+				HDC hMemDC = CreateCompatibleDC(hdc);
 				GetClientRect(hWnd, &crt);
 				if(g_hBitmap == NULL){
 					g_hBitmap = CreateCompatibleBitmap(hdc, crt.right, crt.bottom);
@@ -144,20 +142,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 				HGDIOBJ hOld = SelectObject(hMemDC, g_hBitmap);
 				FillRect(hMemDC, &crt, GetSysColorBrush(COLOR_BTNFACE));
 
-				// Draw
+				if(g_hBitmap == NULL){ return 0; }
+				if(g_hScreenDC == NULL){ g_hScreenDC = GetDC(NULL); }
 
-				GetObject(g_hBitmap, sizeof(BITMAP), &bmp);
-				BitBlt(hdc, 0,0, bmp.bmWidth, bmp.bmHeight, hMemDC, 0,0, SRCCOPY);
-				SelectObject(hMemDC, hOld);
-				DeleteDC(hMemDC);
-				*/
-				DrawBitmap(hdc, 0,0, g_hBitmap);
-				EndPaint(hWnd, &ps);
-			}
-			return 0;
-
-		case WM_MOUSEHOOK:
-			{
 				POINT		Mouse, Origin;
 				BITMAP		bmp;
 				COLORREF	color;
@@ -172,93 +159,92 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 				int X = (int)(Mouse.x * XScale);
 				int Y = (int)(Mouse.y * YScale);
 
-				switch(wParam){
-					case WM_MOUSEMOVE:
-						{
-							HDC hScreenMemDC		= CreateCompatibleDC(g_hScreenDC);
+				if(1){
+					HDC		hScreenMemDC	= CreateCompatibleDC(g_hScreenDC);
+					if(g_hScreenBitmap == NULL){
+						g_hScreenBitmap		= CreateCompatibleBitmap(g_hScreenDC, g_rcMagnify.right, g_rcMagnify.bottom);
+					}
+					HGDIOBJ hScreenOld		= SelectObject(hScreenMemDC, g_hScreenBitmap);
 
-							HBITMAP hScreenBitmap	= CreateCompatibleBitmap(g_hScreenDC, g_rcMagnify.right, g_rcMagnify.bottom);
-							HGDIOBJ hScreenOld		= SelectObject(hScreenMemDC, hScreenBitmap);
+					GetObject(g_hScreenBitmap, sizeof(BITMAP), &bmp);
+					BitBlt(
+							hScreenMemDC,
+							0, 0, bmp.bmWidth, bmp.bmHeight,
+							g_hScreenDC,
+							X - (bmp.bmWidth / (g_iRate * 2)), Y - (bmp.bmHeight / (g_iRate * 2)),
+							SRCCOPY
+						  );
 
-							GetObject(hScreenBitmap, sizeof(BITMAP), &bmp);
-							BitBlt(
-									hScreenMemDC,
-									0, 0, bmp.bmWidth, bmp.bmHeight,
-									g_hScreenDC,
-									X - (bmp.bmWidth / (g_iRate * 2)), Y - (bmp.bmHeight / (g_iRate * 2)),
-									SRCCOPY
-								  );
+					HDC hDrawMemDC		= CreateCompatibleDC(hdc);
+					if(g_hDrawBitmap == NULL){
+						g_hDrawBitmap	= CreateCompatibleBitmap(hdc, g_rcMagnify.right, g_rcMagnify.bottom);
+					}
+					HGDIOBJ hDrawOld	= SelectObject(hDrawMemDC, g_hDrawBitmap);
 
-							if(g_hBitmap == NULL){ return 0; }
+					GetObject(g_hDrawBitmap, sizeof(BITMAP), &bmp);
+					SetStretchBltMode(hDrawMemDC, HALFTONE);
+					StretchBlt(
+							hDrawMemDC,
+							0, 0, bmp.bmWidth, bmp.bmHeight,
+							hScreenMemDC,
+							0, 0, bmp.bmWidth / g_iRate, bmp.bmHeight / g_iRate,
+							SRCCOPY
+							);
 
-							HDC hdc				= GetDC(hWnd);
-							HDC hDrawMemDC		= CreateCompatibleDC(hdc);
-							HBITMAP hDrawBitmap = CreateCompatibleBitmap(hdc, g_rcMagnify.right, g_rcMagnify.bottom);
-							HGDIOBJ hDrawOld	= SelectObject(hDrawMemDC, hDrawBitmap);
+					int	iWidth	= bmp.bmWidth,
+						iHeight	= bmp.bmHeight,
+						iRadius	= 5;
 
-							GetObject(hDrawBitmap, sizeof(BITMAP), &bmp);
-							SetStretchBltMode(hDrawMemDC, HALFTONE);
-							StretchBlt(
-									hDrawMemDC,
-									0, 0, bmp.bmWidth, bmp.bmHeight,
-									hScreenMemDC,
-									0, 0, bmp.bmWidth / g_iRate, bmp.bmHeight / g_iRate,
-									SRCCOPY
-									);
+					Origin.x	= iWidth / 2;
+					Origin.y	= iHeight / 2;
 
-							int	iWidth	= bmp.bmWidth,
-								iHeight	= bmp.bmHeight,
-								iRadius	= 5;
+					color		= GetAverageColor(hDrawMemDC, Origin.x, Origin.y, iRadius);
 
-							Origin.x	= iWidth / 2;
-							Origin.y	= iHeight / 2;
+					HPEN hPen;
+					if(IsColorDark(color)){
+						hPen = CreatePen(PS_SOLID, 1, RGB(255,255,255));
+					}else{
+						hPen = CreatePen(PS_SOLID, 1, RGB(0,0,0));
+					}
 
-							color		= GetAverageColor(hDrawMemDC, Origin.x, Origin.y, iRadius);
+					HPEN hOldPen		= (HPEN)SelectObject(hDrawMemDC, hPen);
+					HBRUSH hOldBrush	= (HBRUSH)SelectObject(hDrawMemDC, (HBRUSH)GetStockObject(NULL_BRUSH));
+					Ellipse(hDrawMemDC, Origin.x - iRadius, Origin.y - iRadius, Origin.x + iRadius, Origin.y + iRadius);
+					SelectObject(hDrawMemDC, hOldBrush);
+					SelectObject(hDrawMemDC, hOldPen);
+					DeleteObject(hPen);
 
-							HPEN hPen;
-							if(IsColorDark(color)){
-								hPen = CreatePen(PS_SOLID, 1, RGB(255,255,255));
-							}else{
-								hPen = CreatePen(PS_SOLID, 1, RGB(0,0,0));
-							}
-
-							HPEN hOldPen		= (HPEN)SelectObject(hDrawMemDC, hPen);
-							HBRUSH hOldBrush	= (HBRUSH)SelectObject(hDrawMemDC, (HBRUSH)GetStockObject(NULL_BRUSH));
-							Ellipse(hDrawMemDC, Origin.x - iRadius, Origin.y - iRadius, Origin.x + iRadius, Origin.y + iRadius);
-							SelectObject(hDrawMemDC, hOldBrush);
-							SelectObject(hDrawMemDC, hOldPen);
-							DeleteObject(hPen);
-
-							HDC hClientMemDC	= CreateCompatibleDC(hdc);
-							HGDIOBJ hClientOld	= SelectObject(hClientMemDC, g_hBitmap);
-							FillRect(hClientMemDC, &crt, GetSysColorBrush(COLOR_BTNFACE));
-
-							GetObject(g_hBitmap, sizeof(BITMAP), &bmp);
-							BitBlt(
-									hClientMemDC,
-									10,10, bmp.bmWidth, bmp.bmHeight,
-									hDrawMemDC,
-									0,0,
-									SRCCOPY
-								  );
-
-							SelectObject(hClientMemDC, hClientOld);
-							SelectObject(hDrawMemDC, hDrawOld);
-							SelectObject(hScreenMemDC, hScreenOld);
-							DeleteDC(hClientMemDC);
-							DeleteDC(hDrawMemDC);
-							DeleteDC(hScreenMemDC);
-							ReleaseDC(hWnd, hdc);
-						}
-						break;
-
-					default:
-						break;
+					SelectObject(hDrawMemDC, hDrawOld);
+					SelectObject(hScreenMemDC, hScreenOld);
+					DeleteDC(hDrawMemDC);
+					DeleteDC(hScreenMemDC);
 				}
+
+				// Draw Objects
+				if(g_hDrawBitmap != NULL){
+					DrawBitmap(hMemDC, 10, 10, g_hDrawBitmap);
+				}
+
+				GetCursorPos(&Mouse);
+				TCHAR Debug[256];
+				StringCbPrintf(Debug, sizeof(Debug), TEXT("Mouse(%d,%d)"), Mouse.x, Mouse.y);
+				TextOut(hMemDC, crt.left, crt.bottom - 20, Debug, lstrlen(Debug));
+
+				GetObject(g_hBitmap, sizeof(BITMAP), &bmp);
+				BitBlt(hdc, 0,0, bmp.bmWidth, bmp.bmHeight, hMemDC, 0,0, SRCCOPY);
+				SelectObject(hMemDC, hOld);
+				DeleteDC(hMemDC);
+				EndPaint(hWnd, &ps);
 			}
 			return 0;
 
+		case WM_MOUSEHOOK:
+			InvalidateRect(hWnd, NULL, FALSE);
+			return 0;
+
 		case WM_DESTROY:
+			if(g_hDrawBitmap){DeleteObject(g_hDrawBitmap);}
+			if(g_hScreenBitmap){DeleteObject(g_hScreenBitmap);}
 			if(g_hBitmap){ DeleteObject(g_hBitmap); }
 			if(g_hHook){ UnhookWindowsHookEx(g_hHook); }
 			if(g_hModule){ FreeLibrary(g_hModule); }
