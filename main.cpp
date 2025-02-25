@@ -3,6 +3,10 @@
 #include <strsafe.h>
 #define CLASS_NAME		TEXT("ColorFromPoint")
 #define WM_MOUSEHOOK	WM_USER+321
+#define WM_KEYBOARDHOOK	WM_USER+123
+#define min(a,b)	(((a) < (b)) ? (a) : (b))
+#define max(a,b)	(((a) < (b)) ? (b) : (a))
+#define abs(a)		(((a) < 0) ? -(a) : (a))
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam);
 
@@ -60,29 +64,32 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow){
 }
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam){
-	const char		*MyDll				= "MyMouseDll.dll",
-		  *MyProc				= "MyMouseProc",
-		  *MyUtil				= "Init";
+	const char		*MyDll				= "MyApiDll.dll",
+		  *MyMouseProc					= "MyMouseProc",
+		  *MyKeyboardProc				= "MyKeyboardProc",
+		  *MyUtil						= "MyInit";
 	static HDC		g_hScreenDC			= NULL;
 	static RECT		g_rcMagnify			= {0,};
 	static HBITMAP	g_hBitmap			= NULL,
 					g_hDrawBitmap		= NULL,
 					g_hScreenBitmap		= NULL,
 					g_hMagnifyCaptureBitmap = NULL;
-	static HHOOK	g_hHook				= NULL;
+	static HHOOK	g_hMouse			= NULL,
+					g_hKeyboard			= NULL;
 	static HMODULE	g_hModule			= NULL;
-	static HOOKPROC	g_lpfnHookProc		= NULL;
-	static float	g_XScale			= 0,
-					g_YScale			= 0;
-	static int		g_iRate				= 2,
-					g_X					= 0,
+	static HOOKPROC	g_lpfnMouseProc		= NULL,
+					g_lpfnKeyboardProc	= NULL;
+	static float	g_Rate				= 2.0,
+					g_XScale			= 1.0,
+					g_YScale			= 1.0;
+	static int		g_X					= 0,
 					g_Y					= 0;
 	static BOOL		g_bMagnifyCaputre	= FALSE,
 					g_bDown				= FALSE,
 					g_bReset			= FALSE;
 	static HMONITOR	g_hCurrentMonitor	= NULL;
 
-	void (*pInit)(HWND, HHOOK) = NULL;
+	void (*pInit)(HWND, HHOOK, HHOOK)	= NULL;
 
 	RECT	crt;
 	BITMAP	bmp;
@@ -92,23 +99,29 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 	POINT		Mouse, Origin;
 	COLORREF	color;
 	TCHAR		ColorText[256];
+	HMONITOR hCurrentMonitor;
 
 	switch(iMessage){
 		case WM_CREATE:
-			// TODO: DLL 명시적 호출 및 프로시저 핸들 얻어오기
 			try{
 				g_hModule = LoadLibrary(MyDll);
 				if(g_hModule == NULL){ throw 1; }
 
-				g_lpfnHookProc = (HOOKPROC)GetProcAddress(g_hModule, MyProc);
-				if(g_lpfnHookProc == NULL){ throw 2; }
+				g_lpfnMouseProc = (HOOKPROC)GetProcAddress(g_hModule, MyMouseProc);
+				if(g_lpfnMouseProc == NULL){ throw 2; }
 
-				g_hHook = SetWindowsHookEx(WH_MOUSE_LL, g_lpfnHookProc,g_hModule, 0);
-				if(g_hHook == NULL){ throw 3; }
+				g_hMouse = SetWindowsHookEx(WH_MOUSE_LL, g_lpfnMouseProc,g_hModule, 0);
+				if(g_hMouse == NULL){ throw 3; }
 
-				pInit = (void (*)(HWND, HHOOK))GetProcAddress(g_hModule, MyUtil);
-				if(pInit == NULL){ throw 4; }
-				(*pInit)(hWnd, g_hHook);
+				g_lpfnKeyboardProc = (HOOKPROC)GetProcAddress(g_hModule, MyKeyboardProc);
+				if(g_lpfnKeyboardProc == NULL){ throw 4; }
+
+				g_hKeyboard = SetWindowsHookEx(WH_KEYBOARD_LL, g_lpfnKeyboardProc,g_hModule, 0);
+				if(g_hKeyboard == NULL){ throw 5; }
+
+				pInit = (void (*)(HWND, HHOOK, HHOOK))GetProcAddress(g_hModule, MyUtil);
+				if(pInit == NULL){ throw 6; }
+				(*pInit)(hWnd, g_hMouse, g_hKeyboard);
 
 			} catch (const int err){
 				ErrorMessage(TEXT("Init Failed"));
@@ -140,7 +153,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 					DeleteObject(g_hBitmap);
 					g_hBitmap = NULL;
 				}
-
 			}
 			return 0;
 
@@ -180,9 +192,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 					GetObject(g_hScreenBitmap, sizeof(BITMAP), &bmp);
 					BitBlt(
 							hScreenMemDC,
-							0, 0, bmp.bmWidth, bmp.bmHeight,
+							0, 0, bmp.bmWidth * g_XScale, bmp.bmHeight * g_YScale,
 							g_hScreenDC,
-							g_X - (bmp.bmWidth / (g_iRate * 2)), g_Y - (bmp.bmHeight / (g_iRate * 2)),
+							g_X - (bmp.bmWidth / g_Rate / 2), g_Y - (bmp.bmHeight / g_Rate / 2),
 							SRCCOPY
 						  );
 
@@ -196,9 +208,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 					SetStretchBltMode(hDrawMemDC, HALFTONE);
 					StretchBlt(
 							hDrawMemDC,
-							0, 0, bmp.bmWidth, bmp.bmHeight,
+							0, 0, bmp.bmWidth * g_XScale, bmp.bmHeight * g_YScale,
 							hScreenMemDC,
-							0, 0, bmp.bmWidth / g_iRate, bmp.bmHeight / g_iRate,
+							0, 0, (bmp.bmWidth / g_Rate) * g_XScale, (bmp.bmHeight / g_Rate) * g_YScale,
 							SRCCOPY
 							);
 
@@ -248,50 +260,150 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 			}
 			return 0;
 
-		case WM_MOUSEHOOK:
-			switch(wParam){
-				case WM_LBUTTONDOWN:
-					{
-						/* TODO: 되긴 하는데 속도가 느려지므로 다른 방법 생각해볼 것 */
-						g_bDown = TRUE;
-						HDC hdc = GetDC(hWnd);
-						HDC hMemDC = CreateCompatibleDC(hdc);
-						HDC hTempDC = CreateCompatibleDC(hdc);
-						GetObject(g_hScreenBitmap, sizeof(BITMAP), &bmp);
-						if(g_hMagnifyCaptureBitmap == NULL){
-							g_hMagnifyCaptureBitmap = CreateCompatibleBitmap(hdc, bmp.bmWidth, bmp.bmHeight);
+		case WM_KEYBOARDHOOK:
+			{
+				KBDLLHOOKSTRUCT *ptr = (KBDLLHOOKSTRUCT*)lParam;
+
+				switch(wParam){
+					case WM_KEYUP:
+					case WM_KEYDOWN:
+						{
+							WORD VKCode = ptr->vkCode,
+								 KeyFlags = ptr->flags,
+								 ScanCode = ptr->scanCode;
+
+							BOOL bExtended,
+								 bWasKeyDown,
+								 bKeyReleased;
+
+							// 확장 키(Numpad 등) 플래그 있을 시 0xE0이 접두(HIWORD)로 붙는다
+							bExtended	= ((KeyFlags&& LLKHF_EXTENDED) == LLKHF_EXTENDED);
+							if(bExtended){ ScanCode = MAKEWORD(ScanCode, 0xE0); }
+							bWasKeyDown	= !(KeyFlags & LLKHF_UP);
+
+							if(bWasKeyDown){
+								switch(VKCode){
+									case 0x33:
+										if(GetKeyState(VK_CONTROL) & 0x8000 && GetKeyState(VK_MENU) & 0x8000){
+											if(g_hMagnifyCaptureBitmap != NULL){
+												DeleteObject(g_hMagnifyCaptureBitmap);
+												g_hMagnifyCaptureBitmap = NULL;
+											}
+
+											HDC hdc = GetDC(hWnd);
+											HDC hMemDC = CreateCompatibleDC(hdc);
+											HDC hTempDC = CreateCompatibleDC(hdc);
+
+											GetObject(g_hScreenBitmap, sizeof(BITMAP), &bmp);
+											g_hMagnifyCaptureBitmap = CreateCompatibleBitmap(hdc, bmp.bmWidth, bmp.bmHeight);
+											HGDIOBJ hOld = SelectObject(hMemDC, g_hScreenBitmap);
+											HGDIOBJ hTempOld = SelectObject(hTempDC, g_hMagnifyCaptureBitmap);
+
+											SetStretchBltMode(hTempDC, HALFTONE);
+											StretchBlt(
+													hTempDC,
+													0, 0, bmp.bmWidth * g_XScale, bmp.bmHeight * g_YScale,
+													hMemDC,
+													0, 0, (bmp.bmWidth / g_Rate) * g_XScale, (bmp.bmHeight / g_Rate) * g_YScale,
+													SRCCOPY
+													);
+
+											SelectObject(hTempDC, hTempOld);
+											SelectObject(hMemDC, hOld);
+											DeleteDC(hTempDC);
+											DeleteDC(hMemDC);
+											ReleaseDC(hWnd, hdc);
+
+											g_bDown = TRUE;
+										}
+										break;
+								}
+							}
 						}
-						HGDIOBJ hOld = SelectObject(hMemDC,	g_hMagnifyCaptureBitmap);
-						HGDIOBJ hTempOld = SelectObject(hTempDC, g_hScreenBitmap);
+						break;
+				}
+			}
+			InvalidateRect(hWnd, NULL, FALSE);
+			return 0;
 
-						SetStretchBltMode(hMemDC, HALFTONE);
-						StretchBlt(
-							hMemDC,
-							0, 0, bmp.bmWidth, bmp.bmHeight,
-							hTempDC,
-							0, 0, bmp.bmWidth / g_iRate, bmp.bmHeight / g_iRate,
-							SRCCOPY
-							);
+		case WM_MOUSEHOOK:
+			{
+				MSLLHOOKSTRUCT*ptr = (MSLLHOOKSTRUCT*)lParam;
+				g_X = (int)(ptr->pt.x);
+				g_Y = (int)(ptr->pt.y);
 
-						SelectObject(hTempDC, hTempOld);
-						SelectObject(hMemDC, hOld);
-						DeleteDC(hTempDC);
-						DeleteDC(hMemDC);
-						ReleaseDC(hWnd, hdc);
-					}
-					break;
+				SHORT WheelDelta,
+					  XButton;
 
-				case WM_MOUSEMOVE:
-					{
-						GetCursorPos(&Mouse);
-						HMONITOR hCurrentMonitor = MonitorFromPoint(Mouse, MONITOR_DEFAULTTONEAREST);
+				int	Lines		= 0,
+					nScroll		= 0,
+					WheelUnit	= 0;
+				static int	SumDelta	= 0;
+
+				switch(wParam){
+					case WM_MOUSEMOVE:
+						hCurrentMonitor = MonitorFromPoint(Mouse, MONITOR_DEFAULTTONEAREST);
 						if(g_hCurrentMonitor != hCurrentMonitor){
 							g_hCurrentMonitor = hCurrentMonitor;
 							GetRealDpi(g_hCurrentMonitor, &g_XScale, &g_YScale);
 						}
-						g_X = (int)(Mouse.x * g_XScale), g_Y = (int)(Mouse.y * g_YScale);
-					}
-					break;
+						break;
+
+					case WM_MOUSEWHEEL:
+						if(GetKeyState(VK_MENU) & 0x8000){
+							if(g_hScreenBitmap != NULL){
+								DeleteObject(g_hScreenBitmap);
+								g_hScreenBitmap = NULL;
+							}
+
+							if(g_hDrawBitmap != NULL){
+								DeleteObject(g_hDrawBitmap);
+								g_hDrawBitmap = NULL;
+							}
+
+							if(g_hBitmap != NULL){
+								DeleteObject(g_hBitmap);
+								g_hBitmap = NULL;
+							}
+
+							nScroll			= 0;
+							WheelDelta		= HIWORD(ptr->mouseData);
+
+							SystemParametersInfo(SPI_GETWHEELSCROLLLINES, 0, &Lines, 0);
+							// WHEEL_DELTA(120)
+							WheelUnit		= WHEEL_DELTA / Lines;
+
+							SumDelta		+= WheelDelta;
+							nScroll			= SumDelta / WheelUnit;
+
+							// 부호 상관없이 나머지 계산
+							SumDelta		%= WheelUnit;
+
+							int steps		= abs(nScroll);
+							float factor	= 0.1f;
+							if(nScroll > 0){
+								g_Rate = max(1.f, min(5.f, g_Rate + factor * steps));
+							}else{
+								g_Rate = max(1.f, min(5.f, g_Rate - factor * steps));
+							}
+						}
+						break;
+
+					case WM_XBUTTONDOWN:
+					case WM_XBUTTONUP:
+						XButton = HIWORD(ptr->mouseData);
+						if(XButton == XBUTTON1){
+
+						}
+
+						if(XButton == XBUTTON2){
+
+						}
+						break;
+
+					default:
+						break;
+				}
 			}
 			InvalidateRect(hWnd, NULL, FALSE);
 			return 0;
@@ -301,7 +413,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 			if(g_hScreenBitmap){ DeleteObject(g_hScreenBitmap); }
 			if(g_hDrawBitmap){ DeleteObject(g_hDrawBitmap); }
 			if(g_hBitmap){ DeleteObject(g_hBitmap); }
-			if(g_hHook){ UnhookWindowsHookEx(g_hHook); }
+			if(g_hMouse){ UnhookWindowsHookEx(g_hMouse); }
+			if(g_hKeyboard){ UnhookWindowsHookEx(g_hKeyboard); }
 			if(g_hModule){ FreeLibrary(g_hModule); }
 			PostQuitMessage(0);
 			return 0;
