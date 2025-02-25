@@ -60,18 +60,23 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow){
 }
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam){
-	const char		*MyDll			= "MyMouseDll.dll",
-		  *MyProc			= "MyMouseProc",
-		  *MyUtil			= "Init";
-	static HDC		g_hScreenDC		= NULL;
-	static RECT		g_rcMagnify		= {0,};
-	static int		g_iRate			= 2;
-	static HBITMAP	g_hBitmap		= NULL,
-					g_hDrawBitmap	= NULL,
-					g_hScreenBitmap = NULL;
-	static HHOOK	g_hHook			= NULL;
-	static HMODULE	g_hModule		= NULL;
-	static HOOKPROC	g_lpfnHookProc	= NULL;
+	const char		*MyDll				= "MyMouseDll.dll",
+					*MyProc				= "MyMouseProc",
+					*MyUtil				= "Init";
+	static HDC		g_hScreenDC			= NULL;
+	static RECT		g_rcMagnify			= {0,};
+	static HBITMAP	g_hBitmap			= NULL,
+					g_hDrawBitmap		= NULL,
+					g_hScreenBitmap		= NULL;
+	static HHOOK	g_hHook				= NULL;
+	static HMODULE	g_hModule			= NULL;
+	static HOOKPROC	g_lpfnHookProc		= NULL;
+	static float	g_XScale			= 0,
+					g_YScale			= 0;
+	static int		g_iRate				= 2,
+					g_X					= 0,
+					g_Y					= 0;
+	static HMONITOR	g_hCurrentMonitor	= NULL;
 
 	void (*pInit)(HWND, HHOOK) = NULL;
 
@@ -79,6 +84,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 	BITMAP	bmp;
 	DWORD	dwStyle, dwExStyle;
 	int		EditX, EditY, EditWidth, EditHeight;
+
+	POINT		Mouse, Origin;
+	COLORREF	color;
+	TCHAR		ColorText[256];
 
 	switch(iMessage){
 		case WM_CREATE:
@@ -110,10 +119,24 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 
 		case WM_SIZE:
 			if(wParam != SIZE_MINIMIZED){
+				GetClientRect(hWnd, &crt);
+				SetRect(&g_rcMagnify, 0,0, crt.right / 5, crt.bottom / 4);
+
+				if(g_hScreenBitmap != NULL){
+					DeleteObject(g_hScreenBitmap);
+					g_hScreenBitmap = NULL;
+				}
+
+				if(g_hDrawBitmap != NULL){
+					DeleteObject(g_hDrawBitmap);
+					g_hDrawBitmap = NULL;
+				}
+
 				if(g_hBitmap != NULL){
 					DeleteObject(g_hBitmap);
 					g_hBitmap = NULL;
 				}
+
 			}
 			return 0;
 
@@ -142,25 +165,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 				HGDIOBJ hOld = SelectObject(hMemDC, g_hBitmap);
 				FillRect(hMemDC, &crt, GetSysColorBrush(COLOR_BTNFACE));
 
-				if(g_hBitmap == NULL){ return 0; }
 				if(g_hScreenDC == NULL){ g_hScreenDC = GetDC(NULL); }
-
-				POINT		Mouse, Origin;
-				BITMAP		bmp;
-				COLORREF	color;
-				TCHAR		ColorText[256];
-
-				GetCursorPos(&Mouse);
-				HMONITOR hCurrentMonitor = MonitorFromPoint(Mouse, MONITOR_DEFAULTTONEAREST);
-
-				float XScale, YScale;
-				GetRealDpi(hCurrentMonitor, &XScale, &YScale);
-
-				int X = (int)(Mouse.x * XScale);
-				int Y = (int)(Mouse.y * YScale);
-
 				if(1){
-					HDC		hScreenMemDC	= CreateCompatibleDC(g_hScreenDC);
+					HDC	hScreenMemDC		= CreateCompatibleDC(g_hScreenDC);
 					if(g_hScreenBitmap == NULL){
 						g_hScreenBitmap		= CreateCompatibleBitmap(g_hScreenDC, g_rcMagnify.right, g_rcMagnify.bottom);
 					}
@@ -171,7 +178,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 							hScreenMemDC,
 							0, 0, bmp.bmWidth, bmp.bmHeight,
 							g_hScreenDC,
-							X - (bmp.bmWidth / (g_iRate * 2)), Y - (bmp.bmHeight / (g_iRate * 2)),
+							g_X - (bmp.bmWidth / (g_iRate * 2)), g_Y - (bmp.bmHeight / (g_iRate * 2)),
 							SRCCOPY
 						  );
 
@@ -239,6 +246,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 			return 0;
 
 		case WM_MOUSEHOOK:
+			{
+				GetCursorPos(&Mouse);
+				HMONITOR hCurrentMonitor = MonitorFromPoint(Mouse, MONITOR_DEFAULTTONEAREST);
+				if(g_hCurrentMonitor != hCurrentMonitor){
+					g_hCurrentMonitor = hCurrentMonitor;
+					GetRealDpi(g_hCurrentMonitor, &g_XScale, &g_YScale);
+				}
+				g_X = (int)(Mouse.x * g_XScale), g_Y = (int)(Mouse.y * g_YScale);
+			}
 			InvalidateRect(hWnd, NULL, FALSE);
 			return 0;
 
