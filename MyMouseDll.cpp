@@ -25,14 +25,7 @@ HHOOK	g_Hook SHARED	= NULL;
 // TODO: lParam 값 읽고 데이터 가공해서 전달
 LRESULT CALLBACK MyMouseProc(int nCode, WPARAM wParam, LPARAM lParam){
 	if(nCode == HC_ACTION && g_hWnd != NULL){
-		switch(wParam){
-			case WM_MOUSEMOVE:
-				SendMessage(g_hWnd, WM_USER+321, wParam, lParam);
-				break;
-
-			default:
-				break;
-		}
+		SendMessage(g_hWnd, WM_USER+321, wParam, lParam);
 	}
 
 	return CallNextHookEx(g_Hook, nCode, wParam, lParam);

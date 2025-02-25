@@ -61,13 +61,14 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow){
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam){
 	const char		*MyDll				= "MyMouseDll.dll",
-					*MyProc				= "MyMouseProc",
-					*MyUtil				= "Init";
+		  *MyProc				= "MyMouseProc",
+		  *MyUtil				= "Init";
 	static HDC		g_hScreenDC			= NULL;
 	static RECT		g_rcMagnify			= {0,};
 	static HBITMAP	g_hBitmap			= NULL,
 					g_hDrawBitmap		= NULL,
-					g_hScreenBitmap		= NULL;
+					g_hScreenBitmap		= NULL,
+					g_hMagnifyCaptureBitmap = NULL;
 	static HHOOK	g_hHook				= NULL;
 	static HMODULE	g_hModule			= NULL;
 	static HOOKPROC	g_lpfnHookProc		= NULL;
@@ -76,6 +77,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 	static int		g_iRate				= 2,
 					g_X					= 0,
 					g_Y					= 0;
+	static BOOL		g_bMagnifyCaputre	= FALSE,
+					g_bDown				= FALSE,
+					g_bReset			= FALSE;
 	static HMONITOR	g_hCurrentMonitor	= NULL;
 
 	void (*pInit)(HWND, HHOOK) = NULL;
@@ -232,10 +236,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 					DrawBitmap(hMemDC, 10, 10, g_hDrawBitmap);
 				}
 
-				GetCursorPos(&Mouse);
-				TCHAR Debug[256];
-				StringCbPrintf(Debug, sizeof(Debug), TEXT("Mouse(%d,%d)"), Mouse.x, Mouse.y);
-				TextOut(hMemDC, crt.left, crt.bottom - 20, Debug, lstrlen(Debug));
+				if(g_bDown){
+					DrawBitmap(hMemDC, 20 + g_rcMagnify.right, 10, g_hMagnifyCaptureBitmap);
+				}
 
 				GetObject(g_hBitmap, sizeof(BITMAP), &bmp);
 				BitBlt(hdc, 0,0, bmp.bmWidth, bmp.bmHeight, hMemDC, 0,0, SRCCOPY);
@@ -246,21 +249,57 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 			return 0;
 
 		case WM_MOUSEHOOK:
-			{
-				GetCursorPos(&Mouse);
-				HMONITOR hCurrentMonitor = MonitorFromPoint(Mouse, MONITOR_DEFAULTTONEAREST);
-				if(g_hCurrentMonitor != hCurrentMonitor){
-					g_hCurrentMonitor = hCurrentMonitor;
-					GetRealDpi(g_hCurrentMonitor, &g_XScale, &g_YScale);
-				}
-				g_X = (int)(Mouse.x * g_XScale), g_Y = (int)(Mouse.y * g_YScale);
+			switch(wParam){
+				case WM_LBUTTONDOWN:
+					{
+						/* TODO: 되긴 하는데 속도가 느려지므로 다른 방법 생각해볼 것 */
+						g_bDown = TRUE;
+						HDC hdc = GetDC(hWnd);
+						HDC hMemDC = CreateCompatibleDC(hdc);
+						HDC hTempDC = CreateCompatibleDC(hdc);
+						GetObject(g_hScreenBitmap, sizeof(BITMAP), &bmp);
+						if(g_hMagnifyCaptureBitmap == NULL){
+							g_hMagnifyCaptureBitmap = CreateCompatibleBitmap(hdc, bmp.bmWidth, bmp.bmHeight);
+						}
+						HGDIOBJ hOld = SelectObject(hMemDC,	g_hMagnifyCaptureBitmap);
+						HGDIOBJ hTempOld = SelectObject(hTempDC, g_hScreenBitmap);
+
+						SetStretchBltMode(hMemDC, HALFTONE);
+						StretchBlt(
+							hMemDC,
+							0, 0, bmp.bmWidth, bmp.bmHeight,
+							hTempDC,
+							0, 0, bmp.bmWidth / g_iRate, bmp.bmHeight / g_iRate,
+							SRCCOPY
+							);
+
+						SelectObject(hTempDC, hTempOld);
+						SelectObject(hMemDC, hOld);
+						DeleteDC(hTempDC);
+						DeleteDC(hMemDC);
+						ReleaseDC(hWnd, hdc);
+					}
+					break;
+
+				case WM_MOUSEMOVE:
+					{
+						GetCursorPos(&Mouse);
+						HMONITOR hCurrentMonitor = MonitorFromPoint(Mouse, MONITOR_DEFAULTTONEAREST);
+						if(g_hCurrentMonitor != hCurrentMonitor){
+							g_hCurrentMonitor = hCurrentMonitor;
+							GetRealDpi(g_hCurrentMonitor, &g_XScale, &g_YScale);
+						}
+						g_X = (int)(Mouse.x * g_XScale), g_Y = (int)(Mouse.y * g_YScale);
+					}
+					break;
 			}
 			InvalidateRect(hWnd, NULL, FALSE);
 			return 0;
 
 		case WM_DESTROY:
-			if(g_hDrawBitmap){DeleteObject(g_hDrawBitmap);}
-			if(g_hScreenBitmap){DeleteObject(g_hScreenBitmap);}
+			if(g_hMagnifyCaptureBitmap){ DeleteObject(g_hMagnifyCaptureBitmap); }
+			if(g_hScreenBitmap){ DeleteObject(g_hScreenBitmap); }
+			if(g_hDrawBitmap){ DeleteObject(g_hDrawBitmap); }
 			if(g_hBitmap){ DeleteObject(g_hBitmap); }
 			if(g_hHook){ UnhookWindowsHookEx(g_hHook); }
 			if(g_hModule){ FreeLibrary(g_hModule); }
