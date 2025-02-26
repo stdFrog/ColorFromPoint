@@ -211,6 +211,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 			}
 
 			hControls[nControls - 1]= CreateWindowEx(WS_EX_CLIENTEDGE, TEXT("listbox"), NULL, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY | LBS_OWNERDRAWFIXED, 0,0,0,0, hWnd, (HMENU)IDC_LBSTART, GetModuleHandle(NULL), NULL);
+			SetTimer(hWnd, 1, 10, NULL);
 			return 0;
 
 		case WM_SIZE:
@@ -350,129 +351,139 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 			}
 			return 0;
 
+		case WM_TIMER:
+			switch(wParam){
+				case 1:
+					{
+						HDC hdc = GetDC(hWnd);
+						HDC hMemDC = CreateCompatibleDC(hdc);
+						GetClientRect(hWnd, &crt);
+						if(g_hBitmap == NULL){
+							g_hBitmap = CreateCompatibleBitmap(hdc, crt.right, crt.bottom);
+						}
+						HGDIOBJ hOld = SelectObject(hMemDC, g_hBitmap);
+						FillRect(hMemDC, &crt, GetSysColorBrush(COLOR_BTNFACE));
+
+						if(g_hScreenDC == NULL){ g_hScreenDC = GetDC(NULL); }
+						HDC	hScreenMemDC		= CreateCompatibleDC(g_hScreenDC);
+						if(g_hScreenBitmap == NULL){
+							g_hScreenBitmap		= CreateCompatibleBitmap(g_hScreenDC, g_rcMagnify.right, g_rcMagnify.bottom);
+						}
+						HGDIOBJ hScreenOld		= SelectObject(hScreenMemDC, g_hScreenBitmap);
+
+						GetObject(g_hScreenBitmap, sizeof(BITMAP), &bmp);
+						BitBlt(
+								hScreenMemDC,
+								0, 0, bmp.bmWidth * g_XScale, bmp.bmHeight * g_YScale,
+								g_hScreenDC,
+								g_X - (bmp.bmWidth / g_Rate / 2), g_Y - (bmp.bmHeight / g_Rate / 2),
+								SRCCOPY
+							  );
+
+						HDC hDrawMemDC		= CreateCompatibleDC(hdc);
+						if(g_hDrawBitmap == NULL){
+							g_hDrawBitmap	= CreateCompatibleBitmap(hdc, g_rcMagnify.right, g_rcMagnify.bottom);
+						}
+						HGDIOBJ hDrawOld	= SelectObject(hDrawMemDC, g_hDrawBitmap);
+
+						GetObject(g_hDrawBitmap, sizeof(BITMAP), &bmp);
+						SetStretchBltMode(hDrawMemDC, HALFTONE);
+						StretchBlt(
+								hDrawMemDC,
+								0, 0, bmp.bmWidth * g_XScale, bmp.bmHeight * g_YScale,
+								hScreenMemDC,
+								0, 0, (bmp.bmWidth / g_Rate) * g_XScale, (bmp.bmHeight / g_Rate) * g_YScale,
+								SRCCOPY
+								);
+
+						iWidth	= bmp.bmWidth;
+						iHeight	= bmp.bmHeight;
+						iRadius	= 5;
+
+						Origin.x	= iWidth / 2;
+						Origin.y	= iHeight / 2;
+
+						color		= GetAverageColor(hDrawMemDC, Origin.x, Origin.y, iRadius);
+
+						HPEN hPen;
+						if(IsColorDark(color)){
+							hPen = CreatePen(PS_SOLID, 1, RGB(255,255,255));
+						}else{
+							hPen = CreatePen(PS_SOLID, 1, RGB(0,0,0));
+						}
+
+						HPEN hOldPen		= (HPEN)SelectObject(hDrawMemDC, hPen);
+						HBRUSH hOldBrush	= (HBRUSH)SelectObject(hDrawMemDC, (HBRUSH)GetStockObject(NULL_BRUSH));
+						Ellipse(hDrawMemDC, Origin.x - iRadius, Origin.y - iRadius, Origin.x + iRadius, Origin.y + iRadius);
+						SelectObject(hDrawMemDC, hOldBrush);
+						SelectObject(hDrawMemDC, hOldPen);
+						DeleteObject(hPen);
+
+						SelectColor = GetPixel(hDrawMemDC, Origin.x, Origin.y);
+
+						SelectObject(hDrawMemDC, hDrawOld);
+						SelectObject(hScreenMemDC, hScreenOld);
+						DeleteDC(hDrawMemDC);
+						DeleteDC(hScreenMemDC);
+
+						SetRect(&srt, Padding, Padding, Padding + g_rcMagnify.right, Padding + g_rcMagnify.bottom);
+						InflateRect(&srt, EDGEFRAME, EDGEFRAME);
+						DrawEdge(hMemDC, &srt, EDGE_SUNKEN, BF_RECT);
+
+						InflateRect(&srt, -EDGEFRAME, -EDGEFRAME);
+						if(g_hDrawBitmap != NULL){
+							DrawBitmap(hMemDC, srt.left, srt.top, g_hDrawBitmap);
+						}
+
+						SetRect(&srt, Padding + srt.right, srt.top, Padding + srt.right + g_rcMagnify.right, srt.bottom);
+						InflateRect(&srt, EDGEFRAME, EDGEFRAME);
+						DrawEdge(hMemDC, &srt, EDGE_SUNKEN, BF_RECT);
+
+						InflateRect(&srt, -EDGEFRAME, -EDGEFRAME);
+						if(g_hMagnifyCaptureBitmap != NULL){
+							DrawBitmap(hMemDC, srt.left, srt.top, g_hMagnifyCaptureBitmap);
+						}
+
+						DrawEdge(hMemDC, &g_rcRed, EDGE_SUNKEN, BF_RECT);
+						DrawEdge(hMemDC, &g_rcGreen, EDGE_SUNKEN, BF_RECT);
+						DrawEdge(hMemDC, &g_rcBlue, EDGE_SUNKEN, BF_RECT);
+						DrawEdge(hMemDC, &g_rcBlack, EDGE_SUNKEN, BF_RECT);
+
+						CopyRect(&srt, &g_rcRed);
+						InflateRect(&srt, -EDGEFRAME, -EDGEFRAME);
+						FillRect(hMemDC, &srt, hRedBrush);
+
+						CopyRect(&srt, &g_rcGreen);
+						InflateRect(&srt, -EDGEFRAME, -EDGEFRAME);
+						FillRect(hMemDC, &srt, hGreenBrush);
+
+						CopyRect(&srt, &g_rcBlue);
+						InflateRect(&srt, -EDGEFRAME, -EDGEFRAME);
+						FillRect(hMemDC, &srt, hBlueBrush);
+
+						CopyRect(&srt, &g_rcBlack);
+						InflateRect(&srt, -EDGEFRAME, -EDGEFRAME);
+						FillRect(hMemDC, &srt, hBlackBrush);
+
+						HBRUSH hEllipseBrush	= CreateSolidBrush(EllipseColor),
+							   hEllipseOldBrush	= (HBRUSH)SelectObject(hMemDC, hEllipseBrush);
+						Ellipse(hMemDC, EllipseOrigin.x - g_iRadius, EllipseOrigin.y - g_iRadius, EllipseOrigin.x + g_iRadius, EllipseOrigin.y + g_iRadius);
+						SelectObject(hMemDC, hEllipseOldBrush);
+						DeleteObject(hEllipseBrush);
+
+						GetObject(g_hBitmap, sizeof(BITMAP), &bmp);
+						BitBlt(hdc, 0,0, bmp.bmWidth, bmp.bmHeight, hMemDC, 0,0, SRCCOPY);
+						SelectObject(hMemDC, hOld);
+						DeleteDC(hMemDC);
+						ReleaseDC(hWnd, hdc);
+					}
+					break;
+			}
+			return 0;
 		case WM_PAINT:
 			{
 				PAINTSTRUCT ps;
 				HDC hdc = BeginPaint(hWnd, &ps);
-				HDC hMemDC = CreateCompatibleDC(hdc);
-				GetClientRect(hWnd, &crt);
-				if(g_hBitmap == NULL){
-					g_hBitmap = CreateCompatibleBitmap(hdc, crt.right, crt.bottom);
-				}
-				HGDIOBJ hOld = SelectObject(hMemDC, g_hBitmap);
-				FillRect(hMemDC, &crt, GetSysColorBrush(COLOR_BTNFACE));
-
-				if(g_hScreenDC == NULL){ g_hScreenDC = GetDC(NULL); }
-				HDC	hScreenMemDC		= CreateCompatibleDC(g_hScreenDC);
-				if(g_hScreenBitmap == NULL){
-					g_hScreenBitmap		= CreateCompatibleBitmap(g_hScreenDC, g_rcMagnify.right, g_rcMagnify.bottom);
-				}
-				HGDIOBJ hScreenOld		= SelectObject(hScreenMemDC, g_hScreenBitmap);
-
-				GetObject(g_hScreenBitmap, sizeof(BITMAP), &bmp);
-				BitBlt(
-						hScreenMemDC,
-						0, 0, bmp.bmWidth * g_XScale, bmp.bmHeight * g_YScale,
-						g_hScreenDC,
-						g_X - (bmp.bmWidth / g_Rate / 2), g_Y - (bmp.bmHeight / g_Rate / 2),
-						SRCCOPY
-					  );
-
-				HDC hDrawMemDC		= CreateCompatibleDC(hdc);
-				if(g_hDrawBitmap == NULL){
-					g_hDrawBitmap	= CreateCompatibleBitmap(hdc, g_rcMagnify.right, g_rcMagnify.bottom);
-				}
-				HGDIOBJ hDrawOld	= SelectObject(hDrawMemDC, g_hDrawBitmap);
-
-				GetObject(g_hDrawBitmap, sizeof(BITMAP), &bmp);
-				SetStretchBltMode(hDrawMemDC, HALFTONE);
-				StretchBlt(
-						hDrawMemDC,
-						0, 0, bmp.bmWidth * g_XScale, bmp.bmHeight * g_YScale,
-						hScreenMemDC,
-						0, 0, (bmp.bmWidth / g_Rate) * g_XScale, (bmp.bmHeight / g_Rate) * g_YScale,
-						SRCCOPY
-						);
-
-				iWidth	= bmp.bmWidth;
-				iHeight	= bmp.bmHeight;
-				iRadius	= 5;
-
-				Origin.x	= iWidth / 2;
-				Origin.y	= iHeight / 2;
-
-				color		= GetAverageColor(hDrawMemDC, Origin.x, Origin.y, iRadius);
-
-				HPEN hPen;
-				if(IsColorDark(color)){
-					hPen = CreatePen(PS_SOLID, 1, RGB(255,255,255));
-				}else{
-					hPen = CreatePen(PS_SOLID, 1, RGB(0,0,0));
-				}
-
-				HPEN hOldPen		= (HPEN)SelectObject(hDrawMemDC, hPen);
-				HBRUSH hOldBrush	= (HBRUSH)SelectObject(hDrawMemDC, (HBRUSH)GetStockObject(NULL_BRUSH));
-				Ellipse(hDrawMemDC, Origin.x - iRadius, Origin.y - iRadius, Origin.x + iRadius, Origin.y + iRadius);
-				SelectObject(hDrawMemDC, hOldBrush);
-				SelectObject(hDrawMemDC, hOldPen);
-				DeleteObject(hPen);
-
-				SelectColor = GetPixel(hDrawMemDC, Origin.x, Origin.y);
-
-				SelectObject(hDrawMemDC, hDrawOld);
-				SelectObject(hScreenMemDC, hScreenOld);
-				DeleteDC(hDrawMemDC);
-				DeleteDC(hScreenMemDC);
-
-				SetRect(&srt, Padding, Padding, Padding + g_rcMagnify.right, Padding + g_rcMagnify.bottom);
-				InflateRect(&srt, EDGEFRAME, EDGEFRAME);
-				DrawEdge(hMemDC, &srt, EDGE_SUNKEN, BF_RECT);
-
-				InflateRect(&srt, -EDGEFRAME, -EDGEFRAME);
-				if(g_hDrawBitmap != NULL){
-					DrawBitmap(hMemDC, srt.left, srt.top, g_hDrawBitmap);
-				}
-
-				SetRect(&srt, Padding + srt.right, srt.top, Padding + srt.right + g_rcMagnify.right, srt.bottom);
-				InflateRect(&srt, EDGEFRAME, EDGEFRAME);
-				DrawEdge(hMemDC, &srt, EDGE_SUNKEN, BF_RECT);
-
-				InflateRect(&srt, -EDGEFRAME, -EDGEFRAME);
-				if(g_hMagnifyCaptureBitmap != NULL){
-					DrawBitmap(hMemDC, srt.left, srt.top, g_hMagnifyCaptureBitmap);
-				}
-
-				DrawEdge(hMemDC, &g_rcRed, EDGE_SUNKEN, BF_RECT);
-				DrawEdge(hMemDC, &g_rcGreen, EDGE_SUNKEN, BF_RECT);
-				DrawEdge(hMemDC, &g_rcBlue, EDGE_SUNKEN, BF_RECT);
-				DrawEdge(hMemDC, &g_rcBlack, EDGE_SUNKEN, BF_RECT);
-
-				CopyRect(&srt, &g_rcRed);
-				InflateRect(&srt, -EDGEFRAME, -EDGEFRAME);
-				FillRect(hMemDC, &srt, hRedBrush);
-
-				CopyRect(&srt, &g_rcGreen);
-				InflateRect(&srt, -EDGEFRAME, -EDGEFRAME);
-				FillRect(hMemDC, &srt, hGreenBrush);
-
-				CopyRect(&srt, &g_rcBlue);
-				InflateRect(&srt, -EDGEFRAME, -EDGEFRAME);
-				FillRect(hMemDC, &srt, hBlueBrush);
-
-				CopyRect(&srt, &g_rcBlack);
-				InflateRect(&srt, -EDGEFRAME, -EDGEFRAME);
-				FillRect(hMemDC, &srt, hBlackBrush);
-
-				HBRUSH hEllipseBrush	= CreateSolidBrush(EllipseColor),
-					   hEllipseOldBrush	= (HBRUSH)SelectObject(hMemDC, hEllipseBrush);
-				Ellipse(hMemDC, EllipseOrigin.x - g_iRadius, EllipseOrigin.y - g_iRadius, EllipseOrigin.x + g_iRadius, EllipseOrigin.y + g_iRadius);
-				SelectObject(hMemDC, hEllipseOldBrush);
-				DeleteObject(hEllipseBrush);
-
-				GetObject(g_hBitmap, sizeof(BITMAP), &bmp);
-				BitBlt(hdc, 0,0, bmp.bmWidth, bmp.bmHeight, hMemDC, 0,0, SRCCOPY);
-				SelectObject(hMemDC, hOld);
-				DeleteDC(hMemDC);
 				EndPaint(hWnd, &ps);
 			}
 			return 0;
@@ -686,6 +697,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 			return 0;
 
 		case WM_DESTROY:
+			KillTimer(hWnd, 1);
 			if(g_hMagnifyCaptureBitmap){ DeleteObject(g_hMagnifyCaptureBitmap); }
 			if(g_hScreenBitmap){ DeleteObject(g_hScreenBitmap); }
 			if(g_hDrawBitmap){ DeleteObject(g_hDrawBitmap); }
