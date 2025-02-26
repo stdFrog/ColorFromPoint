@@ -2,13 +2,17 @@
 #include <windows.h>
 #include <strsafe.h>
 #define CLASS_NAME		TEXT("ColorFromPoint")
+#define WM_CHANGEFOCUS	WM_USER+1
 #define WM_MOUSEHOOK	WM_USER+321
 #define WM_KEYBOARDHOOK	WM_USER+123
-#define min(a,b)	(((a) < (b)) ? (a) : (b))
-#define max(a,b)	(((a) < (b)) ? (b) : (a))
-#define abs(a)		(((a) < 0) ? -(a) : (a))
+#define min(a,b)		(((a) < (b)) ? (a) : (b))
+#define max(a,b)		(((a) < (b)) ? (b) : (a))
+#define abs(a)			(((a) < 0) ? -(a) : (a))
+
+#define IDC_EDSTART		1025
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK EditProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam);
 
 POINT GetWindowCenter(HWND hWnd);
 BOOL SetWindowCenter(HWND hParent, HWND hWnd, LPRECT lpRect);
@@ -63,13 +67,48 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow){
 	return (int)msg.wParam;
 }
 
+typedef struct tag_MyRGB{
+	float R;
+	float G;
+	float B;
+}MyRGB;
+
+typedef struct tag_MyCMY{
+	float C;
+	float M;
+	float Y;
+}MyCMY;
+
+typedef struct tag_MyCMYK{
+	float C;
+	float M;
+	float Y;
+	float K;
+}MyCMYK;
+
+void ToHex(COLORREF color, LPTSTR ret, int Size);
+COLORREF ToCOLORREF(LPCTSTR HexCode);
+MyRGB Normalize(COLORREF color);
+MyRGB Normalize(int r, int g, int b);
+float MyGetKValue(MyRGB rgb);
+MyCMY GetCMY(MyRGB rgb, float K);
+MyCMYK ToCMYK(COLORREF color);
+MyCMYK ToCMYK(int r, int g, int b);
+MyRGB ToRGB(MyCMYK cmyk);
+COLORREF ToCOLORREF(MyCMYK cmyk);
+HBRUSH CreateCMYKBrush(MyCMYK cmyk);
+void ToHex(MyCMYK cmyk, LPTSTR ret, int Size);
+
 LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam){
 	const char		*MyDll				= "MyApiDll.dll",
-		  *MyMouseProc					= "MyMouseProc",
-		  *MyKeyboardProc				= "MyKeyboardProc",
-		  *MyUtil						= "MyInit";
+					*MyMouseProc		= "MyMouseProc",
+					*MyKeyboardProc		= "MyKeyboardProc",
+					*MyUtil				= "MyInit";
 	static HDC		g_hScreenDC			= NULL;
-	static RECT		g_rcMagnify			= {0,};
+	static RECT		g_rcMagnify			= {0,},
+					g_rcRed				= {0,},
+					g_rcGreen			= {0,},
+					g_rcBlue			= {0,};
 	static HBITMAP	g_hBitmap			= NULL,
 					g_hDrawBitmap		= NULL,
 					g_hScreenBitmap		= NULL,
@@ -88,18 +127,35 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 					g_bDown				= FALSE,
 					g_bReset			= FALSE;
 	static HMONITOR	g_hCurrentMonitor	= NULL;
+	static TCHAR	ColorText[256];
+
+	static const int	nStatic			= 0,
+						nEdit			= 8,
+						nControls		= nStatic + nEdit,
+						Padding			= 20;
+
+	static HWND		hControls[nControls];
+	static WNDPROC	OldEditProc;
+	static const TCHAR* ControlTitle[] = {
+		TEXT("DEC"),
+		TEXT("HEX")
+	};
+
+	static HBRUSH hRedBrush, hGreenBrush, hBlueBrush;
+	static COLORREF SelectColor;
+	static POINT Mouse;
 
 	void (*pInit)(HWND, HHOOK, HHOOK)	= NULL;
 
-	RECT	crt;
+	RECT	crt, wrt, srt;
 	BITMAP	bmp;
 	DWORD	dwStyle, dwExStyle;
-	int		EditX, EditY, EditWidth, EditHeight;
 
-	POINT		Mouse, Origin;
+	POINT		Origin;
 	COLORREF	color;
-	TCHAR		ColorText[256];
-	HMONITOR hCurrentMonitor;
+	TCHAR		HexCode[6];
+	HMONITOR	hCurrentMonitor;
+	int x, y, Width, Height;
 
 	switch(iMessage){
 		case WM_CREATE:
@@ -132,6 +188,26 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 			}
 
 			SetRect(&g_rcMagnify, 0,0, 100, 100);
+			hRedBrush = CreateSolidBrush(RGB(255, 102, 102));
+			hGreenBrush = CreateSolidBrush(RGB(144, 238, 144));
+			hBlueBrush = CreateSolidBrush(RGB(173, 216, 230));
+
+			for(int i=0; i<nStatic; i++){
+				hControls[i] = CreateWindowEx(WS_EX_CLIENTEDGE, TEXT("static"), ControlTitle[i], WS_CHILD | WS_VISIBLE | SS_CENTER, 0,0,0,0, hWnd, (HMENU)-1, GetModuleHandle(NULL), NULL);
+			}
+
+			WNDCLASS wc;
+			GetClassInfo(NULL, TEXT("edit"), &wc);
+			wc.hInstance		= GetModuleHandle(NULL);
+			wc.lpszClassName	= TEXT("MyEditClass");
+			OldEditProc			= wc.lpfnWndProc;
+			wc.lpfnWndProc		= (WNDPROC)EditProc;
+			RegisterClass(&wc);
+			SetProp(hWnd, TEXT("MyEditClassProc"), (HANDLE)OldEditProc);
+			for(int i=nStatic; i<(nStatic + nEdit); i++){
+				hControls[i] = CreateWindow(TEXT("MyEditClass"), TEXT(""), WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 0,0,0,0, hWnd, (HMENU)(INT_PTR)(IDC_EDSTART + i), GetModuleHandle(NULL), NULL);
+				SendMessage(hControls[i], EM_SETREADONLY, 0,0);
+			}
 			return 0;
 
 		case WM_SIZE:
@@ -153,6 +229,41 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 					DeleteObject(g_hBitmap);
 					g_hBitmap = NULL;
 				}
+
+				Width = Height = 20;
+
+				if(g_bDown){
+					GetObject(g_hMagnifyCaptureBitmap, sizeof(BITMAP), &bmp);
+					x = Padding + 20 + g_rcMagnify.right + bmp.bmWidth;
+
+					y = Padding;
+					SetRect(&g_rcRed, x, y, x + Width, y + Height);
+					y = Padding + (bmp.bmHeight - Height) / 2;
+					SetRect(&g_rcGreen, x, y, x + Width, y + Height);
+					y = Padding + bmp.bmHeight - Height;
+					SetRect(&g_rcBlue, x, y, x + Width, y + Height);
+				}else{
+					x = Padding + 10 + g_rcMagnify.right;
+
+					y = Padding;
+					SetRect(&g_rcRed, x, y, x + Width, y + Height);
+					y = Padding + (g_rcMagnify.bottom - Height) / 2;
+					SetRect(&g_rcGreen, x, y, x + Width, y + Height);
+					y = Padding + g_rcMagnify.bottom - Height;
+					SetRect(&g_rcBlue, x, y, x + Width, y + Height);
+				}
+
+				/*
+				HDWP hdwpEdit	= BeginDeferWindowPos(nEdit);
+				for(int i=nStatic; i<(nStatic + nEdit); i++){
+					x			= g_rcRed.right + Padding;
+					y			= g_rcRed.top;
+					Width		= 50;
+					Height		= 20;
+					hdwpEdit	= DeferWindowPos(hdwpEdit, hControls[i], NULL, x, y + i * Height, Width, Height, SWP_NOZORDER);
+				}
+				EndDeferWindowPos(hdwpEdit);
+				*/
 			}
 			return 0;
 
@@ -237,6 +348,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 					SelectObject(hDrawMemDC, hOldPen);
 					DeleteObject(hPen);
 
+					SelectColor = GetPixel(hDrawMemDC, Origin.x, Origin.y);
+
 					SelectObject(hDrawMemDC, hDrawOld);
 					SelectObject(hScreenMemDC, hScreenOld);
 					DeleteDC(hDrawMemDC);
@@ -245,12 +358,26 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 
 				// Draw Objects
 				if(g_hDrawBitmap != NULL){
-					DrawBitmap(hMemDC, 10, 10, g_hDrawBitmap);
+					DrawBitmap(hMemDC, Padding, Padding, g_hDrawBitmap);
 				}
 
 				if(g_bDown){
-					DrawBitmap(hMemDC, 20 + g_rcMagnify.right, 10, g_hMagnifyCaptureBitmap);
+					DrawBitmap(hMemDC, Padding + 10 + g_rcMagnify.right, Padding, g_hMagnifyCaptureBitmap);
 				}
+
+				SetRect(&srt, Padding, Padding, Padding + g_rcMagnify.right, Padding + g_rcMagnify.bottom);
+				DrawEdge(hMemDC, &srt, EDGE_SUNKEN, BF_RECT);
+
+				DrawEdge(hMemDC, &g_rcRed, EDGE_SUNKEN, BF_RECT);
+				DrawEdge(hMemDC, &g_rcGreen, EDGE_SUNKEN, BF_RECT);
+				DrawEdge(hMemDC, &g_rcBlue, EDGE_SUNKEN, BF_RECT);
+
+				SetRect(&srt, g_rcRed.left + 1, g_rcRed.top + 1, g_rcRed.right - 1, g_rcRed.bottom - 1);
+				FillRect(hMemDC, &srt, hRedBrush);
+				SetRect(&srt, g_rcGreen.left + 1, g_rcGreen.top + 1, g_rcGreen.right - 1, g_rcGreen.bottom - 1);
+				FillRect(hMemDC, &srt, hGreenBrush);
+				SetRect(&srt, g_rcBlue.left + 1, g_rcBlue.top + 1, g_rcBlue.right - 1, g_rcBlue.bottom - 1);
+				FillRect(hMemDC, &srt, hBlueBrush);
 
 				GetObject(g_hBitmap, sizeof(BITMAP), &bmp);
 				BitBlt(hdc, 0,0, bmp.bmWidth, bmp.bmHeight, hMemDC, 0,0, SRCCOPY);
@@ -315,7 +442,20 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 											ReleaseDC(hWnd, hdc);
 
 											g_bDown = TRUE;
+											GetClientRect(hWnd,&crt);
+											SendMessage(hWnd, WM_SIZE, crt.right, crt.bottom);
 										}
+										break;
+
+									case 0x34:
+										if(GetKeyState(VK_CONTROL) & 0x8000 && GetKeyState(VK_MENU) & 0x8000){
+											if(g_hDrawBitmap){
+												// TODO: RGB, CMYK, HEX 문자열 조립하고 에디트에 출력
+											}
+										}
+										break;
+
+									default:
 										break;
 								}
 							}
@@ -329,8 +469,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 		case WM_MOUSEHOOK:
 			{
 				MSLLHOOKSTRUCT*ptr = (MSLLHOOKSTRUCT*)lParam;
-				g_X = (int)(ptr->pt.x);
-				g_Y = (int)(ptr->pt.y);
+				Mouse.x = g_X = (int)(ptr->pt.x);
+				Mouse.y = g_Y = (int)(ptr->pt.y);
 
 				SHORT WheelDelta,
 					  XButton;
@@ -343,6 +483,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 				switch(wParam){
 					case WM_MOUSEMOVE:
 						hCurrentMonitor = MonitorFromPoint(Mouse, MONITOR_DEFAULTTONEAREST);
+
 						if(g_hCurrentMonitor != hCurrentMonitor){
 							g_hCurrentMonitor = hCurrentMonitor;
 							GetRealDpi(g_hCurrentMonitor, &g_XScale, &g_YScale);
@@ -408,6 +549,59 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 			InvalidateRect(hWnd, NULL, FALSE);
 			return 0;
 
+		case WM_CHANGEFOCUS:
+			{
+				HWND hPrevFocus		= (HWND)lParam;
+				WPARAM KeyCode		= wParam;
+
+				switch(KeyCode){
+					case 0:
+						for(int i=nStatic; i<nControls; i++){
+							if(hControls[i] == hPrevFocus){
+								if(i == nStatic){
+									SetFocus(hControls[nControls-1]);
+								}else{
+									SetFocus(hControls[i - 1]);
+								}
+							}
+						}
+						break;
+
+					case 1:
+						for(int i=nStatic; i<nControls; i++){
+							if(hControls[i] == hPrevFocus){
+								if(i == (nControls-1)){
+									SetFocus(hControls[nStatic]);
+								}else{
+									SetFocus(hControls[i + 1]);
+								}
+							}
+						}
+						break;
+
+					case 2:
+						for(int i=nStatic; i<nControls; i++){
+							if(hControls[i] == hPrevFocus){
+								if(i != nStatic){
+									SetFocus(hControls[i+1]);
+								}
+							}
+						}
+						break;
+
+					case 3:
+						for(int i=nStatic; i<nControls; i++){
+							if(hControls[i] == hPrevFocus){
+								if(i != nStatic){
+									SetFocus(hControls[i-1]);
+								}
+							}
+						}
+						break;
+				}
+			}
+			return 0;
+
 		case WM_DESTROY:
 			if(g_hMagnifyCaptureBitmap){ DeleteObject(g_hMagnifyCaptureBitmap); }
 			if(g_hScreenBitmap){ DeleteObject(g_hScreenBitmap); }
@@ -416,6 +610,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 			if(g_hMouse){ UnhookWindowsHookEx(g_hMouse); }
 			if(g_hKeyboard){ UnhookWindowsHookEx(g_hKeyboard); }
 			if(g_hModule){ FreeLibrary(g_hModule); }
+			if(OldEditProc){
+				for(int i=nStatic; i<(nStatic + nEdit); i++){
+					SetClassLongPtr(hControls[i], GCLP_WNDPROC, (LONG_PTR)OldEditProc);
+				}
+			}
+			if(GetProp(hWnd, TEXT("MyEditClassProc")) != NULL){
+				RemoveProp(hWnd, TEXT("MyEditClassProc"));
+			}
+			if(hRedBrush){ DeleteObject(hRedBrush); }
+			if(hGreenBrush){ DeleteObject(hGreenBrush); }
+			if(hBlueBrush){ DeleteObject(hBlueBrush); }
 			PostQuitMessage(0);
 			return 0;
 	}
@@ -471,7 +676,7 @@ void GetRealDpi(HMONITOR hMonitor, float *XScale, float *YScale){
 }
 
 COLORREF GetAverageColor(HDC hdc, int x, int y, int rad){
-	int	 r	= 0,
+	int	 r  = 0,
 		 g	= 0,
 		 b	= 0;
 
@@ -504,9 +709,9 @@ bool IsColorDark(COLORREF color){
 		 b = GetBValue(color);
 
 	// 가중 평균
-	double brightness = (r * 0.299 + g * 0.587 + b * 0.114) / 255.0;
+	double brightness = (r * 0.299f + g * 0.587f + b * 0.114f) / 255.f;
 
-	return brightness < 0.56;
+	return brightness < 0.56f;
 }
 
 BOOL DrawBitmap(HDC hdc, int x, int y, HBITMAP hBitmap){
@@ -533,8 +738,233 @@ void ErrorMessage(LPCTSTR msg, ...){
 		MessageBox(HWND_DESKTOP, TEXT("DisplayText Error"), TEXT("Warning"), MB_OK);
 	}
 
-	TCHAR buf[0x1000];
+	TCHAR buf[256];
 	StringCbPrintf(buf, sizeof(buf), TEXT("[%s(%d)]%s"), msg, dw, lpMsgBuf);
 	MessageBox(HWND_DESKTOP, (LPCTSTR)buf, TEXT("Error"), MB_ICONWARNING | MB_OK);
 	LocalFree(lpMsgBuf);
 }
+
+void ToHex(COLORREF color, LPTSTR ret, int Size){
+	StringCbPrintf(ret, Size, TEXT("#%02X%02X%02X"), GetRValue(color), GetGValue(color), GetBValue(color));
+}
+
+COLORREF ToCOLORREF(LPCTSTR HexCode){
+	TCHAR* ptr = (TCHAR*)HexCode;
+	if(ptr[0] == '#'){ ptr++; }
+
+	int i = 0,
+		r = 0,
+		g = 0,
+		b = 0,
+		Value = 0;
+
+	for(ptr; *ptr && i<6; ptr++){
+		if(*ptr > '0' && *ptr < '9'){
+			Value = *ptr -'0';
+		}
+		if(*ptr > 'A' && *ptr < 'F'){
+			Value = *ptr -'A';
+		}
+		if(*ptr > 'a' && *ptr < 'f'){
+			Value = *ptr -'a';
+		}
+
+		if(i < 2){
+			r = (r << 4) | Value;
+		}else if(i <4){
+			g = (g << 4) | Value;
+		}else{
+			b = (b << 4) | Value;
+		}
+
+		i++;
+	}
+
+	return RGB(r, g, b);
+}
+
+MyRGB Normalize(COLORREF color){
+	// 0 ~ 1 : Normalization
+
+	MyRGB rgb;
+	rgb.R = GetRValue(color) / 255.f;
+	rgb.G = GetGValue(color) / 255.f;
+	rgb.B = GetBValue(color) / 255.f;
+	return rgb;
+}
+
+MyRGB Normalize(int r, int g, int b){
+	// 0 ~ 1 : Normalization
+
+	MyRGB rgb;
+	rgb.R = r / 255.f;
+	rgb.G = g / 255.f;
+	rgb.B = b / 255.f;
+	return rgb;
+}
+
+float MyGetKValue(MyRGB rgb) {
+	// K = 1 - max(R',G',B')
+
+	float K = 1.f - max(rgb.R, max(rgb.G, rgb.B));
+	return K;
+}
+
+MyCMY GetCMY(MyRGB rgb, float K) {
+	// C = (1 - R' - K) / (1 - K)
+	// M = (1 - G' - K) / (1 - K)
+	// Y = (1 - B' - K) / (1 - K)
+
+	MyCMY cmy = {0,};
+	if (K < 1.f) {
+		cmy.C = (1.f - rgb.R - K) / (1.f - K);
+		cmy.M = (1.f - rgb.G - K) / (1.f - K);
+		cmy.Y = (1.f - rgb.B - K) / (1.f - K);
+	}
+
+	return cmy;
+}
+
+MyCMYK ToCMYK(COLORREF color){
+	MyRGB rgb = Normalize(color);
+	float K = MyGetKValue(rgb);
+	MyCMY cmy = GetCMY(rgb, K);
+
+	MyCMYK cmyk; // 백분율로 변환
+	cmyk.C = cmy.C * 100.f;
+	cmyk.M = cmy.M * 100.f;
+	cmyk.Y = cmy.Y * 100.f;
+	cmyk.K = K * 100.f;
+
+	return cmyk;
+}
+
+MyCMYK ToCMYK(int r, int g, int b){
+	MyRGB rgb = Normalize(r,g,b);
+	float K = MyGetKValue(rgb);
+	MyCMY cmy = GetCMY(rgb, K);
+
+	MyCMYK cmyk; // 백분율로 변환
+	cmyk.C = cmy.C * 100.f;
+	cmyk.M = cmy.M * 100.f;
+	cmyk.Y = cmy.Y * 100.f;
+	cmyk.K = K * 100.f;
+
+	return cmyk;
+}
+
+MyRGB ToRGB(MyCMYK cmyk){
+	MyRGB rgb;
+
+	// C' = C / 100
+	// M' = M / 100
+	// Y' = Y / 100
+	// K' = K / 100
+	float C = cmyk.C /  100.f,
+		  M = cmyk.M /  100.f,
+		  Y = cmyk.Y /  100.f,
+		  K = cmyk.K /  100.f;
+
+	// R = (1 - C')(1 - K') * 255
+	// G = (1 - C')(1 - K') * 255
+	// B = (1 - C')(1 - K') * 255
+	rgb.R = (1.f - C) * (1.f - K);
+	rgb.G = (1.f - M) * (1.f - K);
+	rgb.B = (1.f - Y) * (1.f - K);
+
+	return rgb;
+}
+
+COLORREF ToCOLORREF(MyCMYK cmyk){
+	// 0 ~ 1: 정규화 값 확인할 수 있도록 변환 공식 분할
+	MyRGB rgb = ToRGB(cmyk);
+
+	int r = (int)(rgb.R * 255.f),
+		g = (int)(rgb.R * 255.f),
+		b = (int)(rgb.R * 255.f);
+
+	return RGB(r,g,b);
+}
+
+HBRUSH CreateCMYKBrush(MyCMYK cmyk){
+	COLORREF color = ToCOLORREF(cmyk);
+	return CreateSolidBrush(color);
+}
+
+void ToHex(MyCMYK cmyk, LPTSTR ret, int Size){
+	COLORREF color = ToCOLORREF(cmyk);
+	StringCbPrintf(ret, Size, TEXT("#%02X%02X%02X"), GetRValue(color), GetGValue(color), GetBValue(color));
+}
+
+LRESULT CALLBACK EditProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam){
+	static CREATESTRUCT* cs;
+	static WNDPROC OldEditProc;
+
+	if(OldEditProc == NULL){
+		OldEditProc = (WNDPROC)GetProp(GetParent(hWnd), TEXT("MyEditClassProc"));
+	}
+
+	switch(iMessage){
+		case WM_LBUTTONDOWN:
+			SetFocus(hWnd);
+			return 0;
+
+		case WM_SETFOCUS:
+			SendMessage(hWnd, EM_SETSEL, 0, -1);
+			break;
+
+		case WM_CHAR:
+		case WM_KEYUP:
+		case WM_KEYDOWN:
+			{
+				WORD VKCode,
+					 KeyFlags,
+					 ScanCode,
+					 RepeatCount;
+
+				BOOL bExtended,
+					 bWasKeyDown,
+					 bKeyReleased;
+
+				VKCode		= LOWORD(wParam);
+				KeyFlags	= HIWORD(lParam);
+				ScanCode	= LOBYTE(KeyFlags);
+				bExtended	= ((KeyFlags&& KF_EXTENDED) == KF_EXTENDED);
+				if(bExtended){ ScanCode = MAKEWORD(ScanCode, 0xE0); }
+
+				bWasKeyDown = ((KeyFlags & KF_REPEAT) == KF_REPEAT);
+				RepeatCount = LOWORD(lParam);
+				bKeyReleased = ((KeyFlags & KF_UP) == KF_UP);
+
+				if(!bKeyReleased){
+					switch(VKCode){
+						case VK_UP:
+						case VK_DOWN:
+						case VK_TAB:
+							if(VKCode == VK_TAB){
+								if(GetKeyState(VK_LSHIFT) & 0x8000){
+									SendMessage(GetParent(hWnd), WM_CHANGEFOCUS, (WPARAM)0, (LPARAM)hWnd);
+								}else{
+									SendMessage(GetParent(hWnd), WM_CHANGEFOCUS, (WPARAM)1, (LPARAM)hWnd);
+								}
+							}else if(VKCode == VK_DOWN){
+								SendMessage(GetParent(hWnd), WM_CHANGEFOCUS, (WPARAM)2, (LPARAM)hWnd);
+							}else if(VKCode == VK_UP){
+								SendMessage(GetParent(hWnd), WM_CHANGEFOCUS, (WPARAM)3, (LPARAM)hWnd);
+							}
+							break;
+
+						default:
+							break;
+					}
+				}
+			}
+			break;
+
+		case WM_CREATE:
+			cs = (CREATESTRUCT*)lParam;
+	}
+
+	return CallWindowProc(OldEditProc, hWnd, iMessage, wParam, lParam);
+}
+
