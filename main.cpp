@@ -12,6 +12,7 @@
 #define EDGEFRAME		2
 #define IDC_EDSTART		1025
 #define IDC_LBSTART		2049
+#define IDM_PROGRAM		4097
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK EditProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam);
@@ -25,6 +26,19 @@ BOOL DrawBitmap(HDC hdc, int x, int y, HBITMAP hBitmap);
 void ErrorMessage(LPCTSTR msg, ...);
 
 int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow){
+	HANDLE hMutex;
+	hMutex = CreateMutex(NULL, FALSE, TEXT("MyColorFromPointMutex"));
+
+	if(GetLastError() == ERROR_ALREADY_EXISTS){
+		CloseHandle(hMutex);
+		HWND hOnce = FindWindow(CLASS_NAME, NULL);
+		if(hOnce){
+			ShowWindowAsync(hOnce, SW_SHOWNORMAL);
+			SetForegroundWindow(hOnce);
+		}
+		return 0;
+	}
+
 	WNDCLASS wc = {
 		CS_HREDRAW | CS_VREDRAW,
 		WndProc,
@@ -47,9 +61,9 @@ int APIENTRY WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow){
 	SetWindowCenter(NULL, NULL, &crt);
 
 	HWND hWnd = CreateWindowEx(
-			WS_EX_CLIENTEDGE | WS_EX_TOPMOST,
+			WS_EX_CLIENTEDGE,
 			CLASS_NAME,
-			TEXT("ColorFromPoint"),
+			CLASS_NAME,
 			WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
 			crt.left, crt.top, crt.right, crt.bottom,
 			NULL,
@@ -162,6 +176,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 	WNDCLASS wc;
 	HDC hdc;
 
+	HMENU hMenu, hPopupMenu;
+
 	switch(iMessage){
 		case WM_CREATE:
 			try{
@@ -194,16 +210,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 
 			SetRect(&g_rcMagnify, 0,0, 100, 100);
 
-			// hRedBrush = CreateSolidBrush(RGB(255, 102, 102));
-			// hRedBrush = CreateSolidBrush(RGB(255, 182, 193));
-			// hRedBrush = CreateSolidBrush(RGB(255, 105, 180));
-			hRedBrush = CreateSolidBrush(RGB(255, 160, 122));
-			// hRedBrush = CreateSolidBrush(RGB(255, 127, 80));
-			hGreenBrush = CreateSolidBrush(RGB(144, 238, 144));
-			// hGreenBrush = CreateSolidBrush(RGB(152, 251, 152));
-			hBlueBrush = CreateSolidBrush(RGB(173, 216, 230));
-			// hBlueBrush = CreateSolidBrush(RGB(135, 206, 235));
-			// hBlueBrush = CreateSolidBrush(RGB(70, 130, 180));
+			color = ToCOLORREF(TEXT("#c92519"));
+			hRedBrush = CreateSolidBrush(color);
+			color = ToCOLORREF(TEXT("#00A86B"));
+			hGreenBrush = CreateSolidBrush(color);
+			color = ToCOLORREF(TEXT("#0080ff"));
+			hBlueBrush = CreateSolidBrush(color);
 			hBlackBrush = CreateSolidBrush(RGB(54, 69, 79));
 
 			GetClassInfo(NULL, TEXT("edit"), &wc);
@@ -227,6 +239,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 			hWhitePen = CreatePen(PS_SOLID, 1, RGB(255,255,255));
 			hBlackPen = CreatePen(PS_SOLID, 1, RGB(0,0,0));
 			ReleaseDC(hWnd, hdc);
+
+			hMenu                   = CreateMenu();
+			hPopupMenu              = CreatePopupMenu();
+			AppendMenu(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hPopupMenu, TEXT("메뉴(&Menu)"));
+			AppendMenu(hPopupMenu, MF_STRING, IDM_PROGRAM, TEXT("프로그램 소개"));
+			SetMenu(hWnd, hMenu);
+
 			SetTimer(hWnd, 1, 10, NULL);
 			return 0;
 
@@ -363,6 +382,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 							}
 							break;
 					}
+					break;
+
+				case IDM_PROGRAM:
+					MessageBox(hWnd, TEXT("프로그램 소개\r\n\r\n위 프로그램은 색상값 조사에 사용되는 도구입니다.\r\n마우스 커서가 위치한 지점에서 일정한 크기의 영역을 조사하여 이미지 정보를 가져옵니다.\r\n주로, 이미지에 대한 색상 정보를 조사할 때 사용되며 추후 버전이 업데이트 되어 기능이 추가될 수 있습니다.\r\n\r\n단축키\r\n1. Ctrl + Alt + 3 : 마우스 주변 영역을 캡처합니다. \r\n2. Ctrl + Alt + 4 : 마우스 커서가 위치한 지점의 색상값을 CMYK, RGB, HEX로 변환합니다.\r\n3. Alt + 마우스 휠 : 이미지를 확대하거나 축소할 수 있습니다.\r\n\r\n※ 참고\r\n색상값을 변환할 때 최근 변환한 색상을 리스트에 기록합니다.\r\n이는 저장되지 않으며, 색상을 선택하면 이미지에 색상을 적용하여 보여줍니다."), TEXT("ColorFromPoint"), MB_OK);
 					break;
 			}
 			return 0;
@@ -887,14 +910,14 @@ COLORREF ToCOLORREF(LPCTSTR HexCode){
 		Value = 0;
 
 	for(ptr; *ptr && i<6; ptr++){
-		if(*ptr > '0' && *ptr < '9'){
+		if(*ptr >= '0' && *ptr <= '9'){
 			Value = *ptr -'0';
 		}
-		if(*ptr > 'A' && *ptr < 'F'){
-			Value = *ptr -'A';
+		if(*ptr >= 'A' && *ptr <= 'F'){
+			Value = *ptr -'A' + 10;
 		}
-		if(*ptr > 'a' && *ptr < 'f'){
-			Value = *ptr -'a';
+		if(*ptr >= 'a' && *ptr <= 'f'){
+			Value = *ptr -'a' + 10;
 		}
 
 		if(i < 2){
