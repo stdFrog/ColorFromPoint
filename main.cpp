@@ -450,7 +450,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 
 						iWidth	= bmp.bmWidth;
 						iHeight	= bmp.bmHeight;
-						iRadius	= 5;
+						iRadius	= 3;
 
 						Origin.x = iWidth / 2;
 						Origin.y = iHeight / 2;
