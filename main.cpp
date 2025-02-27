@@ -609,7 +609,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 
 												StringCbPrintf(HexCode, sizeof(HexCode), TEXT("%.2f"), cmyk.K);
 												SetDlgItemText(hWnd, IDC_EDSTART+9, HexCode);
-
+												
 												SetDlgItemInt(hWnd, IDC_EDSTART+3, r, FALSE);
 												SetDlgItemInt(hWnd, IDC_EDSTART+4, g, FALSE);
 												SetDlgItemInt(hWnd, IDC_EDSTART+5, b, FALSE);
@@ -726,13 +726,27 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT iMessage, WPARAM wParam, LPARAM lParam)
 				WPARAM KeyCode		= wParam;
 
 				int	Next,
-					Half = nEdit / 2;
+					Half = nEdit / 2,
+					adjusted = nEdit - 1;
+					
 				for(int i=0; i<nEdit; i++){
 					if(hControls[i] == hPrevFocus){
 						if(KeyCode == 0 || KeyCode == 2){
-							Next = (i - 1 + nEdit) % nEdit;
+							if(i == 3){
+								Next = 9;
+							}else if(i == 9){
+								Next = 2;
+							}else{
+								Next = (i - 1 + adjusted) % adjusted;
+							}
 						}else{
-							Next = (i + 1) % nEdit;
+							if(i == 2){
+								Next = 9;
+							}else if(i == 9){
+								Next = 3;
+							}else{
+								Next = (i + 1) % adjusted;
+							}
 						}
 
 						SetFocus(hControls[Next]);
